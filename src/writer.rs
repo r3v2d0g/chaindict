@@ -11,6 +11,8 @@ use crate::{
 /// A writer which allows adding entries to a chain stored in some storage by
 /// creating a new link.
 pub struct Writer<T: Entry> {
+    storage: Storage,
+
     /// The offset of the first entry inserted as part of the link this is creating.
     offset: u32,
 
@@ -32,8 +34,7 @@ pub struct Writer<T: Entry> {
     delta: storage::Writer,
 
     /// The writer for the snapshot file for the link this is creating.
-    // TODO(MLB): make optional
-    snapshot: storage::Writer,
+    snapshot: Option<storage::Writer>,
 
     _t: PhantomData<T>,
 }
@@ -42,39 +43,53 @@ impl<T: Entry> Writer<T> {
     /// Creates a new writer for the given storage, creating a link which is extending
     /// `previous`.
     pub async fn create(previous: Option<LinkId>, storage: Storage) -> Result<Self> {
-        // TODO(MLB): get latest
-        // TODO(MLB): optionally start loading snapshot in background
-
         let id = LinkId::random();
         let delta = storage.create(id, Delta).await?;
-        let mut snapshot = storage.create(id, Snapshot).await?;
-
-        let (offset, index) = if let Some(previous) = previous {
-            // TODO(MLB): if append is supported, copy the file then append to it (ignoring the footer in the middle when reading)
-            // TODO(MLB): read + start writing in the background, buffering while preparing
-
-            let mut previous = storage.open(previous, Snapshot).await?;
-            let footer = SFooter::read(&mut previous).await?;
-            snapshot.copy_from(previous).await?;
-
-            (footer.count, footer.index + 1)
-        } else {
-            (0, 0)
-        };
 
         Ok(Self {
-            offset,
+            storage,
+
+            offset: 0,
             count: 0,
 
             id,
             previous,
-            index,
+            index: 0,
 
             delta,
-            snapshot,
+            snapshot: None,
 
             _t: PhantomData,
         })
+    }
+
+    /// Writes a snapshot file for the link.
+    ///
+    /// Fails if entries have already been added to the link's delta file.
+    pub async fn with_snapshot(&mut self) -> Result<()> {
+        // TODO(MLB): optionally start loading snapshot in background
+
+        if self.delta.file_size() != 0 {
+            return Err(Error::NotEmpty);
+        }
+
+        let mut snapshot = self.storage.create(self.id, Snapshot).await?;
+        if let Some(previous) = self.previous {
+            // TODO(MLB): if append is supported, copy the file then append to it (ignoring the footer in the middle when reading)
+            // TODO(MLB): read + start writing in the background, buffering while preparing
+
+            let mut previous = self.storage.open(previous, Snapshot).await?;
+            let footer = SFooter::read(&mut previous).await?;
+            snapshot.copy_from(previous).await?;
+
+            self.offset = footer.count;
+            self.count = footer.count;
+            self.index = footer.index + 1;
+        }
+
+        self.snapshot = Some(snapshot);
+
+        Ok(())
     }
 
     /// Writes a unique entry to the link's file(s), returning the `u32` assigned to it.
@@ -82,6 +97,21 @@ impl<T: Entry> Writer<T> {
     /// The caller _must_ guarantee that the entry has not been inserted in a previous
     /// link.
     pub async fn write_unique(&mut self, entry: T) -> Result<u32> {
+        // If `previous` has been set but `index` is still `0`, it means that we are not
+        // writing a snapshot file (i.e. `with_snapshot()` hasn't been called) – we need to
+        // read the previous link's delta footer to get some information about the state of
+        // the chain.
+        if self.index == 0
+            && let Some(previous) = self.previous
+        {
+            let mut previous = self.storage.open(previous, Delta).await?;
+            let footer = DFooter::read(&mut previous).await?;
+
+            self.offset = footer.count;
+            self.count = footer.count;
+            self.index = footer.index + 1;
+        }
+
         if self.count == u32::MAX {
             return Err(Error::TooManyEntries);
         }
@@ -91,13 +121,17 @@ impl<T: Entry> Writer<T> {
 
         // TODO(MLB): validate that exactly `T::SIZE` bytes were written
         entry.write(&mut self.delta).await?;
-        entry.write(&mut self.snapshot).await?;
+        if let Some(snapshot) = &mut self.snapshot {
+            entry.write(snapshot).await?;
+        }
 
         Ok(id)
     }
 
     /// Finishes writing, flushing all remaining bytes to the file(s) and retuning the
     /// ID assigned to the newly created link.
+    ///
+    /// Fails if no entries were added to the link.
     pub async fn finish(self) -> Result<LinkId> {
         let Self {
             offset,
@@ -106,9 +140,13 @@ impl<T: Entry> Writer<T> {
             previous,
             index,
             mut delta,
-            mut snapshot,
+            snapshot,
             ..
         } = self;
+
+        if offset == count {
+            return Err(Error::Empty);
+        }
 
         let dfooter = DFooter {
             previous,
@@ -123,8 +161,21 @@ impl<T: Entry> Writer<T> {
             count,
         };
 
-        try_join(dfooter.write(&mut delta), sfooter.write(&mut snapshot)).await?;
-        try_join(delta.finish(), snapshot.finish()).await?;
+        let delta = async move {
+            dfooter.write(&mut delta).await?;
+            delta.finish().await
+        };
+
+        let snapshot = async move {
+            if let Some(mut snapshot) = snapshot {
+                sfooter.write(&mut snapshot).await?;
+                snapshot.finish().await
+            } else {
+                Ok(())
+            }
+        };
+
+        try_join(delta, snapshot).await?;
 
         Ok(id)
     }

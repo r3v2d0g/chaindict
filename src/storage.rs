@@ -38,6 +38,9 @@ pub struct Reader {
 pub struct Writer {
     /// The raw writer this is writing to.
     writer: opendal::Writer,
+
+    /// The number of bytes which have been written to the file so far..
+    file_size: usize,
 }
 
 /// The (currently) latest version of the storage format.
@@ -106,7 +109,10 @@ impl Storage {
         // TODO(MLB): configure the writer?
         let writer = self.operator.writer(&path).await?;
 
-        Ok(Writer { writer })
+        Ok(Writer {
+            writer,
+            file_size: 0,
+        })
     }
 
     /// Returns the path at which the file of the given kind for the link with the given
@@ -222,13 +228,22 @@ impl Reader {
 }
 
 impl Writer {
+    /// Returns the number of bytes which have been written to the file so far.
+    #[inline]
+    pub(crate) fn file_size(&self) -> usize {
+        self.file_size
+    }
+
     /// Reads everything from `reader` and writes it to the writer as-is.
     pub(crate) async fn copy_from(&mut self, reader: Reader) -> Result<()> {
         let range = (reader.offset as u64)..(reader.file_size as u64);
         let mut stream = reader.reader.into_stream(range).await?;
 
         while let Some(buffer) = stream.try_next().await? {
+            let num_bytes = buffer.len();
+
             self.writer.write(buffer).await?;
+            self.file_size += num_bytes;
         }
 
         Ok(())
@@ -266,6 +281,7 @@ impl Writer {
     pub async fn write_bytes<const N: usize>(&mut self, bytes: [u8; N]) -> Result<()> {
         // TODO(MLB): do some buffering?
         self.writer.write_from(bytes.as_slice()).await?;
+        self.file_size += N;
 
         Ok(())
     }

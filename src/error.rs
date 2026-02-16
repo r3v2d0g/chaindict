@@ -20,8 +20,15 @@ pub enum Error {
     /// although it should.
     DoesNotExist { link: LinkId, kind: Kind },
 
+    /// The newly created link is empty, which isn't allowed.
+    Empty,
+
     /// The file is smaller than expected.
     FileSize { expected: usize, got: usize },
+
+    /// A snapshot file cannot be created because entries were already added to the
+    /// delta for the link.
+    NotEmpty,
 
     /// An error occurred while interacting with the storage.
     Storage(opendal::Error),
@@ -54,11 +61,13 @@ impl Display for Error {
             ),
 
             Self::DoesNotExist { link, kind } => write!(f, "File does not exist: {link}.{kind}"),
+            Self::Empty => write!(f, "Link is empty"),
             Self::FileSize { expected, got } => write!(
                 f,
                 "File is too small: expected >= {expected} bytes but it only contains {got} bytes"
             ),
 
+            Self::NotEmpty => write!(f, "Cannot create a snapshot with a non-empty delta"),
             Self::Storage(error) => write!(f, "{error}"),
             Self::TooManyEntries => write!(f, "Reached the maximum number of entries"),
 
