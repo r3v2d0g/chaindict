@@ -1,0 +1,66 @@
+use std::fmt::{self, Display, Formatter};
+
+use crate::LinkId;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug)]
+pub enum Error {
+    /// The chain is disconnected.
+    ///
+    /// When loading the links start from `latest` and going backward, we should
+    /// eventually reach `expected`, but instead we reach the end of the chain at `got`.
+    Disconnected {
+        latest: LinkId,
+        expected: LinkId,
+        got: LinkId,
+    },
+
+    /// The file is smaller than expected.
+    FileSize { expected: usize, got: usize },
+
+    /// An error occurred while interacting with the storage.
+    Storage(opendal::Error),
+
+    /// The maximum number of entries ([`u32::MAX`]) has been reached, no new entry can
+    /// be inserted.
+    TooManyEntries,
+
+    /// The storage format version used to encode a file is unsupported.
+    Version { expected: u16, got: u16 },
+}
+
+impl From<opendal::Error> for Error {
+    #[inline]
+    fn from(error: opendal::Error) -> Self {
+        Self::Storage(error)
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            Self::Disconnected {
+                latest,
+                expected,
+                got,
+            } => write!(
+                f,
+                "Disconnected chain: while loading from {latest}, expected to reach {expected} but ended up at {got}"
+            ),
+
+            Self::FileSize { expected, got } => write!(
+                f,
+                "File is too small: expected >= {expected} bytes but it only contains {got} bytes"
+            ),
+
+            Self::Storage(error) => write!(f, "{error}"),
+            Self::TooManyEntries => write!(f, "Reached the maximum number of entries"),
+
+            Self::Version { expected, got } => write!(
+                f,
+                "Unsupported storage format version: expected {expected} but file was encoded with {got}"
+            ),
+        }
+    }
+}

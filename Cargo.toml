@@ -1,0 +1,16 @@
+[package]
+name = "chaindict"
+description = "A chain of dictionaries"
+version = "0.1.0"
+homepage = "https://github.com/r3v2d0g/chaindict"
+documentation = "https://docs.rs/chaindict"
+license = "MPL-2.0"
+authors = ["Matthieu (MLB) Le brazidec <r3v2d0g@jesus.gg>"]
+edition = "2024"
+
+[dependencies]
+futures = { version = "0.3", default-features = false, features = ["async-await", "std"] }
+hashbrown = "0.16"
+uuid = "1.21"
+opendal = "0.55"
+trait-variant = "0.1"
