@@ -1,6 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 
-use crate::LinkId;
+use crate::{LinkId, storage::Kind};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -15,6 +15,10 @@ pub enum Error {
         expected: LinkId,
         got: LinkId,
     },
+
+    /// The file of the given kind for the link with the given ID does not exist
+    /// although it should.
+    DoesNotExist { link: LinkId, kind: Kind },
 
     /// The file is smaller than expected.
     FileSize { expected: usize, got: usize },
@@ -49,6 +53,7 @@ impl Display for Error {
                 "Disconnected chain: while loading from {latest}, expected to reach {expected} but ended up at {got}"
             ),
 
+            Self::DoesNotExist { link, kind } => write!(f, "File does not exist: {link}.{kind}"),
             Self::FileSize { expected, got } => write!(
                 f,
                 "File is too small: expected >= {expected} bytes but it only contains {got} bytes"

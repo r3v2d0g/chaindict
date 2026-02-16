@@ -4,10 +4,11 @@ use std::{
 };
 
 use futures::prelude::*;
-use opendal::Operator;
+use opendal::{ErrorKind, Operator};
 
 use crate::{Error, LinkId, Result};
 
+#[derive(Clone, Copy, Debug)]
 pub enum Kind {
     Delta,
     Snapshot,
@@ -65,20 +66,36 @@ impl Storage {
 
     /// Opens the file of the given kind for the link with the given ID, returning a
     /// reader for it.
+    ///
+    /// Fails if the file does not exist.
     pub(crate) async fn open(&self, id: LinkId, kind: Kind) -> Result<Reader> {
+        self.open_maybe(id, kind)
+            .await?
+            .ok_or_else(|| Error::DoesNotExist { link: id, kind })
+    }
+
+    /// Opens the file of the given kind for the link with the given ID, returning a
+    /// reader for it, if it exists.
+    ///
+    /// Returns `None` if the file does not exist.
+    pub(crate) async fn open_maybe(&self, id: LinkId, kind: Kind) -> Result<Option<Reader>> {
         let path = self.path(id, kind);
 
-        let metadata = self.operator.stat(&path).await?;
-        let file_size = metadata.content_length() as usize;
+        let metadata = match self.operator.stat(&path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
 
+        let file_size = metadata.content_length() as usize;
         // TODO(MLB): configure the reader?
         let reader = self.operator.reader(&path).await?;
 
-        Ok(Reader {
+        Ok(Some(Reader {
             offset: 0,
             file_size,
             reader,
-        })
+        }))
     }
 
     /// Creates a file of the given kind for the link with the given ID, returning a

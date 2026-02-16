@@ -24,6 +24,7 @@ impl<T: Entry, S: BuildHasher + Default> Entries<T, S> {
     /// Creates a new [`Entries`] with enough capacity to insert at least `capacity`
     /// entries.
     #[inline]
+    #[expect(unused)]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             indexes: HashTable::with_capacity(capacity),
@@ -36,6 +37,12 @@ impl<T: Entry, S: BuildHasher + Default> Entries<T, S> {
     #[inline]
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Returns `true` if no entry has been inserted yet.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// Returns the entry represented by the given `u32`, if there is one.
@@ -53,10 +60,24 @@ impl<T: Entry, S: BuildHasher + Default> Entries<T, S> {
         self.indexes.find(hash, eq).copied()
     }
 
+    /// Reserves enough capacity to insert at least `additional` entries.
+    pub fn reserve(&mut self, additional: usize) {
+        // TODO(MLB): cap at a capacity of `u32::MAX`
+        let hasher = |index: &u32| {
+            let entry = &self.entries[*index as usize];
+            self.hasher.hash_one(entry)
+        };
+
+        self.indexes.reserve(additional, hasher);
+        self.entries.reserve(additional);
+    }
+
     /// Inserts a new entry which isn't already present.
     ///
     /// The caller _must_ guarantee that the entry has not been inserted already.
     pub fn insert_unique(&mut self, entry: T) -> u32 {
+        // TODO(MLB): validate that we did not reach `u32::MAX` entries
+
         let hash = self.hasher.hash_one(&entry);
         let index = self.entries.len() as u32;
         let hasher = |index: &u32| {

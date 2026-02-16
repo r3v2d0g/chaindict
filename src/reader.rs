@@ -24,15 +24,64 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
     /// [1]: Self::get_at()
     /// [2]: Self::get_index_of()
     pub async fn open(latest: LinkId, storage: Storage) -> Result<Self> {
-        // TODO(MLB): if the snapshot doesn't exist, load the deltas instead until a snapshot exists
-        let mut reader = storage.open(latest, Snapshot).await?;
-        let footer = SFooter::read(&mut reader).await?;
+        let mut entries = Entries::default();
+        let mut deltas = Vec::new();
+        let mut total = 0;
 
-        let mut entries = Entries::with_capacity(footer.count as usize);
+        let mut next = latest;
+        loop {
+            // Snapshot files do not neccessarily exist – they are optional.
+            //
+            // We load all deltas until we either reach the end of the chain or a snapshot.
+            if let Some(mut reader) = storage.open_maybe(next, Snapshot).await? {
+                let footer = SFooter::read(&mut reader).await?;
+                total += footer.count as usize;
 
-        for _ in 0..footer.count {
-            let entry = T::read(&mut reader).await?;
-            entries.insert_unique(entry);
+                entries.reserve(total);
+
+                for _ in 0..footer.count {
+                    let entry = T::read(&mut reader).await?;
+                    entries.insert_unique(entry);
+                }
+
+                break;
+            }
+
+            // If no snapshot exists for the link, we instead try to load the delta for it.
+            let mut reader = storage.open(next, Delta).await?;
+            let footer = DFooter::read(&mut reader).await?;
+
+            let mut delta = Vec::with_capacity(footer.count as usize);
+            total += footer.count as usize;
+
+            for _ in 0..footer.count {
+                // TODO(MLB): validate that exactly `T::SIZE` bytes were read
+                let entry = T::read(&mut reader).await?;
+
+                delta.push(entry);
+            }
+
+            deltas.push(delta);
+
+            // Unless this is the last link in the chain we try to load the previous one.
+            let Some(previous) = footer.previous else {
+                break;
+            };
+
+            next = previous;
+        }
+
+        // `entries` is empty if only read deltas – it should otherwise contain some
+        // entries. If it is empty, then we reserve some capacity. If it isn't it should
+        // already have enough capacity to insert all of the entries in `deltas`.
+        if entries.is_empty() {
+            entries.reserve(total);
+        }
+
+        for delta in deltas.into_iter().rev() {
+            for entry in delta {
+                entries.insert_unique(entry);
+            }
         }
 
         Ok(Self {
@@ -47,12 +96,16 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
     /// be used.
     pub async fn reload(&mut self, latest: LinkId) -> Result<()> {
         let mut deltas = Vec::new();
+        let mut additional = 0;
+
+        // TODO(MLB): set a threshold above which we try loading a snapshot (i.e. if there are more
+        //            than `N` entries to load or more than `M` deltas)
 
         let mut next = latest;
         while next != self.latest {
             let mut reader = self.storage.open(next, Delta).await?;
-            let footer = DFooter::read(&mut reader).await?;
 
+            let footer = DFooter::read(&mut reader).await?;
             let Some(previous) = footer.previous else {
                 return Err(Error::Disconnected {
                     latest,
@@ -62,6 +115,8 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
             };
 
             let mut delta = Vec::with_capacity(footer.count as usize);
+            additional += footer.count as usize;
+
             for _ in 0..footer.count {
                 // TODO(MLB): validate that exactly `T::SIZE` bytes were read
                 let entry = T::read(&mut reader).await?;
@@ -72,6 +127,8 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
             deltas.push(delta);
             next = previous;
         }
+
+        self.entries.reserve(additional);
 
         // TODO(MLB): allow to optionally "layer" the deltas instead of merging them
         for delta in deltas.into_iter().rev() {
