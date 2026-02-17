@@ -10,6 +10,9 @@ pub struct Reader<T: Entry, S = RandomState> {
     /// The ID of the latest link which has been loaded.
     latest: LinkId,
 
+    /// The index in the chain of the latest link which has been loaded.
+    index: u32,
+
     /// The entries which have been loaded.
     entries: Entries<T, S>,
 }
@@ -29,6 +32,8 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
         let mut total = 0;
 
         let mut next = latest;
+        let mut latest_index = 0;
+
         loop {
             // Snapshot files do not neccessarily exist – they are optional.
             //
@@ -36,6 +41,10 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
             if let Some(mut reader) = storage.open_maybe(next, Snapshot).await? {
                 let footer = SFooter::read(&mut reader).await?;
                 total += footer.count as usize;
+
+                if next == latest {
+                    latest_index = footer.index;
+                }
 
                 entries.reserve(total);
 
@@ -50,6 +59,10 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
             // If no snapshot exists for the link, we instead try to load the delta for it.
             let mut reader = storage.open(next, Delta).await?;
             let footer = DFooter::read(&mut reader).await?;
+
+            if next == latest {
+                latest_index = footer.index;
+            }
 
             let mut delta = Vec::with_capacity(footer.count as usize);
             total += footer.count as usize;
@@ -88,8 +101,25 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
             storage,
 
             latest,
+            index: latest_index,
             entries,
         })
+    }
+}
+
+impl<T: Entry, S: BuildHasher> Reader<T, S> {
+    /// Returns the ID of the last link in the chain which has been loaded by this
+    /// reader.
+    #[inline]
+    pub fn latest(&self) -> LinkId {
+        self.latest
+    }
+
+    /// Returns the index of the last link in the chain which has been loaded by this
+    /// reader.
+    #[inline]
+    pub fn index(&self) -> u32 {
+        self.index
     }
 
     /// Reloads the reader so that all of the entries present in the `latest` link can
@@ -102,6 +132,8 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
         //            than `N` entries to load or more than `M` deltas)
 
         let mut next = latest;
+        let mut latest_index = 0;
+
         while next != self.latest {
             let mut reader = self.storage.open(next, Delta).await?;
 
@@ -113,6 +145,10 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
                     got: next,
                 });
             };
+
+            if next == latest {
+                latest_index = footer.index;
+            }
 
             let mut delta = Vec::with_capacity(footer.count as usize);
             additional += footer.count as usize;
@@ -138,6 +174,7 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
         }
 
         self.latest = latest;
+        self.index = latest_index;
 
         Ok(())
     }
@@ -145,7 +182,7 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
     /// Returns the number of entries present.
     #[inline]
     #[allow(clippy::len_without_is_empty)] // `is_empty` would otherwise always return `false`
-    pub fn len(&self) -> usize {
+    pub fn len(&self) -> u32 {
         self.entries.len()
     }
 

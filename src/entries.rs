@@ -32,11 +32,13 @@ impl<T: Entry, S: BuildHasher + Default> Entries<T, S> {
             hasher: S::default(),
         }
     }
+}
 
+impl<T: Entry, S: BuildHasher> Entries<T, S> {
     /// Returns the number of entries present.
     #[inline]
-    pub fn len(&self) -> usize {
-        self.entries.len()
+    pub fn len(&self) -> u32 {
+        self.entries.len() as u32
     }
 
     /// Returns `true` if no entry has been inserted yet.
@@ -84,8 +86,12 @@ impl<T: Entry, S: BuildHasher + Default> Entries<T, S> {
     /// Inserts a new entry which isn't already present.
     ///
     /// The caller _must_ guarantee that the entry has not been inserted already.
+    ///
+    /// ## Panic
+    ///
+    /// Panics if `u32::MAX` entries have been inserted already.
     pub fn insert_unique(&mut self, entry: T) -> u32 {
-        // TODO(MLB): validate that we did not reach `u32::MAX` entries
+        assert!(self.entries.len() < u32::MAX as usize, "too many entries");
 
         let hash = self.hasher.hash_one(&entry);
         let index = self.entries.len() as u32;
