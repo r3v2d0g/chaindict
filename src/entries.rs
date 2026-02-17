@@ -60,6 +60,15 @@ impl<T: Entry, S: BuildHasher + Default> Entries<T, S> {
         self.indexes.find(hash, eq).copied()
     }
 
+    /// Iterates over the entries ordered by the `u32` which represent them.
+    #[inline]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (u32, &T)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (index as u32, entry))
+    }
+
     /// Reserves enough capacity to insert at least `additional` entries.
     pub fn reserve(&mut self, additional: usize) {
         // TODO(MLB): cap at a capacity of `u32::MAX`

@@ -166,4 +166,10 @@ impl<T: Entry, S: BuildHasher + Default> Reader<T, S> {
         //            loading all of the entries
         self.entries.get_index_of(entry)
     }
+
+    /// Iterates over the entries ordered by the `u32` which represent them.
+    #[inline]
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (u32, &T)> {
+        self.entries.iter()
+    }
 }
