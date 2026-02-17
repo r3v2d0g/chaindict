@@ -14,6 +14,7 @@ pub enum Kind {
     Snapshot,
 }
 
+#[derive(Clone)]
 pub struct Storage {
     base: Option<String>,
     operator: Operator,

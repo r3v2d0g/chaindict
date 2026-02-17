@@ -42,7 +42,7 @@ pub mod storage;
 pub use self::{
     error::{Error, Result},
     reader::Reader,
-    writer::Writer,
+    writer::{LazyWriter, Writer},
 };
 
 /// The ID of a link in a chain, extending all previous links (unless it is the

@@ -8,6 +8,10 @@ use crate::{
     storage::{self, Kind::*},
 };
 
+mod lazy;
+
+pub use self::lazy::LazyWriter;
+
 /// A writer which allows adding entries to a chain stored in some storage by
 /// creating a new link.
 pub struct Writer<T: Entry> {
