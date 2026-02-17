@@ -51,6 +51,8 @@ impl<T: Entry> LazyWriter<T> {
         }
     }
 
+    // TODO(MLB): with_snapshot_from
+
     /// Writes a unique entry to the link's file(s), returning the `u32` assigned to it.
     ///
     /// The caller _must_ guarantee that the entry has not been inserted in a previous

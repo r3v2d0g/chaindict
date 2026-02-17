@@ -1,9 +1,9 @@
-use std::marker::PhantomData;
+use std::{hash::BuildHasher, marker::PhantomData};
 
 use futures::future::try_join;
 
 use crate::{
-    DFooter, Entry, Error, LinkId, Result, Storage,
+    DFooter, Entry, Error, LinkId, Reader, Result, Storage,
     snapshot::Footer as SFooter,
     storage::{self, Kind::*},
 };
@@ -81,6 +81,56 @@ impl<T: Entry> Writer<T> {
         if let Some(previous) = self.previous {
             // TODO(MLB): if append is supported, copy the file then append to it (ignoring the footer in the middle when reading)
             // TODO(MLB): read + start writing in the background, buffering while preparing
+
+            let mut previous = self.storage.open(previous, Snapshot).await?;
+            let footer = SFooter::read(&mut previous).await?;
+            snapshot.copy_from(previous).await?;
+
+            self.offset = footer.count;
+            self.count = footer.count;
+            self.index = footer.index + 1;
+        }
+
+        self.snapshot = Some(snapshot);
+
+        Ok(())
+    }
+
+    /// Writes a snapshot file for the link using the given reader.
+    ///
+    /// The latest link loaded by `previous` must be the ID of the previous link.
+    ///
+    /// Fails if entries have already been added to the link's delta file.
+    pub async fn with_snapshot_from<S: BuildHasher>(
+        &mut self,
+        previous: &Reader<T, S>,
+    ) -> Result<()> {
+        if self.delta.file_size() != 0 {
+            return Err(Error::NotEmpty);
+        }
+
+        let Some(expected) = self.previous else {
+            return Err(Error::MissingPrevious);
+        };
+
+        if expected != previous.latest() {
+            return Err(Error::InvalidReader {
+                expected,
+                got: previous.latest(),
+            });
+        }
+
+        let mut snapshot = self.storage.create(self.id, Snapshot).await?;
+        for (_, entry) in previous.iter() {
+            entry.write(&mut snapshot).await?;
+        }
+
+        self.offset = previous.len();
+        self.count = previous.len();
+        self.index = previous.index() + 1;
+
+        if let Some(previous) = self.previous {
+            // TODO(MLB): start writing in the background, buffering while preparing
 
             let mut previous = self.storage.open(previous, Snapshot).await?;
             let footer = SFooter::read(&mut previous).await?;

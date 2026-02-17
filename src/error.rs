@@ -26,6 +26,13 @@ pub enum Error {
     /// The file is smaller than expected.
     FileSize { expected: usize, got: usize },
 
+    /// The reader does not contain the entries present in the expected link.
+    InvalidReader { expected: LinkId, got: LinkId },
+
+    /// A snapshot cannot be created from a reader if no previous link ID has been
+    /// provided when creating the writer.
+    MissingPrevious,
+
     /// A snapshot file cannot be created because entries were already added to the
     /// delta for the link.
     NotEmpty,
@@ -66,6 +73,18 @@ impl Display for Error {
                 f,
                 "File is too small: expected >= {expected} bytes but it only contains {got} bytes"
             ),
+
+            Self::InvalidReader { expected, got } => write!(
+                f,
+                "Invalid reader: should be at {expected} but is instead at {got}"
+            ),
+
+            Self::MissingPrevious => {
+                write!(
+                    f,
+                    "Cannot snapshot from a reader without the ID of the previous link"
+                )
+            }
 
             Self::NotEmpty => write!(f, "Cannot create a snapshot with a non-empty delta"),
             Self::Storage(error) => write!(f, "{error}"),
